@@ -1,0 +1,45 @@
+{
+  "family": "order-management-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "order-management",
+      "image": "123456789012.dkr.ecr.eu-north-1.amazonaws.com/order-management:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "APP_PORT", "value": "8080" },
+        { "name": "LOG_LEVEL", "value": "info" },
+        { "name": "DB_PORT", "value": "5432" },
+        { "name": "DB_NAME", "value": "mebonadbcap" },
+        { "name": "DB_SSL_MODE", "value": "require" },
+        { "name": "AWS_REGION", "value": "eu-north-1" }
+      ],
+      "secrets": [
+        { "name": "DB_HOST", "valueFrom": "arn:aws:secretsmanager:eu-north-1:123456789012:secret:orderdb/credentials:host::" },
+        { "name": "DB_USER", "valueFrom": "arn:aws:secretsmanager:eu-north-1:123456789012:secret:orderdb/credentials:username::" },
+        { "name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:eu-north-1:123456789012:secret:orderdb/credentials:password::" },
+        { "name": "JWT_SECRET", "valueFrom": "arn:aws:secretsmanager:eu-north-1:123456789012:secret:orderdb/credentials:jwt_secret::" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/order-management",
+          "awslogs-region": "eu-north-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+github.com/bytedance/sonic v1.11.6 h1:3jhUSrGvWVyblvus7qHVRGIXviVbmrUshLCBchZXHqU=
+github.com/bytedance/sonic v1.11.6/go.mod h1:Tmv+ICSp89liY5x3gWrtqGe9z5BP209b5tK/n+mFqVU=
+github.com/gin-gonic/gin v1.10.0 h1:nLLt1cApro6mkCxDYU3YA5ZzZH12zGy8khqkiS1L5wA=
+github.com/gin-gonic/gin v1.10.0/go.mod h1:4+fr/nD8nghRz5HN+/6iDpzHzq2/vDAW105lH8A22cw=
+github.com/golang-jwt/jwt/v5 v5.2.1 h1:WW0rEDSuRIIZsOA278er75T2Qf+s3i1m69i7W48K1p8=
+github.com/golang-jwt/jwt/v5 v5.2.1/go.mod h1:pqq44Bpyc55m4Il8d2n+Q443MH8545me2W89vZSoQ0U=
+github.com/graphql-go/graphql v0.8.1 h1:nLwBwE97+dKq/24Wj9g07fI0vT4Tj7tGf4uU8M2wFm4=
+github.com/graphql-go/graphql v0.8.1/go.mod h1:4LqJqR8uA+tFvh5yW0zV5wYwM/e7A7w9M6/fNf8fN3k=
+github.com/graphql-go/handler v0.2.4 h1:K0v5jKjHn0z8Yk1A/QW0a0z6p0m7y6c1o6U9c5t6g0A=
+github.com/graphql-go/handler v0.2.4/go.mod h1:9mC6P3Yqg4K0Q2d2u9K0X0x3/x+7A7vX1y6K+8F9Z+E=
+gorm.io/driver/postgres v1.5.9 h1:v7Kj4UoD6A5D5N1sNnCgU7A9sX9A1+u1n4Vw3jX4k1A=
+gorm.io/driver/postgres v1.5.9/go.mod h1:4bN1a7/Y/2N6fB9V5l9l9/QfC5s7bX4o/9vX3u2A/wA=
+gorm.io/gorm v1.25.12 h1:Ere1YMYq2ZSp5KxQnL9tL5jD0m9K4j0xX5d7j0qVz5k=
+gorm.io/gorm v1.25.12/go.mod h1:x0H4h0iY8ZzC3y1x8Xo7Z6m6t4N0t4Z4c9r1s5s8r6s=
