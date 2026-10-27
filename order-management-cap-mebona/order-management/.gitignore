@@ -1,0 +1,10 @@
+.env
+.env.local
+.env.*.local
+bin/
+*.exe
+*.test
+*.out
+coverage.out
+order-management
+.DS_Store
