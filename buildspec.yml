@@ -2,34 +2,32 @@ version: 0.2
 
 env:
   variables:
-    GOPATH: "/go"
-    GOCACHE: "/root/.cache/go-build"
+    GOCACHE: "/tmp/go-cache"
+    GOPATH: "/tmp/go"
 
 phases:
   install:
     runtime-versions:
       golang: 1.22
     commands:
-      - echo "Setting up Go build environment..."
-      - go version
-
+      - echo "Setting up Go cache and directories..."
+      - mkdir -p /tmp/go-cache /tmp/go
+      - echo "Installing dependencies and updating module sums..."
+      - go mod tidy
   pre_build:
     commands:
-      - echo "Cleaning and downloading dependencies..."
-      - go mod tidy
-      - echo "Running unit tests and concurrency validation..."
-      # Runs all tests including order concurrency tests
-      - go test -v ./tests/... -run TestOrderConcurrency
-
+      - echo "Starting Pre-Build Phase..."
+      - echo "Running Unit & Concurrency Tests..."
+      - go test -v ./...
   build:
     commands:
-      - echo "Testing passed. Compiling binary for Linux (Elastic Beanstalk)..."
+      - echo "Starting Build Phase..."
+      - echo "Compiling Go binary for 64-bit Linux deployment..."
       - mkdir -p bin
-      - GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/application main.go
-
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o bin/application main.go
   post_build:
     commands:
-      - echo "Build and tests completed successfully on `date`"
+      - echo "Build and test phases completed successfully on $(date)."
 
 artifacts:
   files:

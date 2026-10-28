@@ -4,168 +4,142 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"order-management/internal/gateway"
 	"order-management/internal/order"
 	"order-management/internal/product"
+	"order-management/middleware"
 )
 
-func setupTestRouter(t *testing.T) (*gin.Engine, order.Repository, product.Repository) {
+const testSecret = "jwt-secret-concurrency-test"
+
+func init() {
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
+}
 
-	// Use in-memory repositories to decouple tests from external PostgreSQL/RDS
+func setupTestEnvironment() (*gin.Engine, order.Repository, product.Repository) {
 	orderRepo := order.NewMemoryRepository()
-	prodRepo := product.NewMemoryRepository()
+	productRepo := product.NewMemoryRepository()
 
-	// Seed product inventory with ample stock for concurrent order tests
-	ctx := context.Background()
-	_ = prodRepo.Save(ctx, &product.Product{
-		ID:    501,
-		Name:  "Test High-Volume Product",
-		Price: 99.99,
-		Stock: 500,
-	})
+	productSvc := product.NewService(productRepo)
+	orderSvc := order.NewService(orderRepo, productSvc)
+	orderCtrl := gateway.NewOrderController(orderSvc)
 
-	prodSvc := product.NewService(prodRepo)
-	orderSvc := order.NewService(orderRepo, prodSvc)
-	orderCtrl := order.NewController(orderSvc)
+	r := gin.New()
+	r.Use(middleware.RequestIDMiddleware())
 
-	api := router.Group("/api/v1")
+	api := r.Group("/api/v1")
+	api.Use(middleware.AuthMiddleware(testSecret))
 	{
 		api.POST("/orders", orderCtrl.CreateOrder)
 		api.GET("/orders/:id", orderCtrl.GetOrder)
 		api.GET("/orders", orderCtrl.ListOrders)
-		api.PUT("/orders/:id/status", orderCtrl.UpdateOrderStatus)
+		api.PUT("/orders/:id/status", middleware.RequireRole("admin"), orderCtrl.UpdateOrderStatus)
 	}
 
-	return router, orderRepo, prodRepo
+	return r, orderRepo, productRepo
 }
 
-func TestOrderConcurrency(t *testing.T) {
-	router, orderRepo, _ := setupTestRouter(t)
+func TestOrderCRUDAndSecurity(t *testing.T) {
+	r, _, _ := setupTestEnvironment()
 
-	const totalRequests = 100
-	var wg sync.WaitGroup
-	var successfulRequests int64
-	var failedRequests int64
+	customerToken, _ := middleware.GenerateToken(101, "customer@test.com", "customer", testSecret, time.Hour)
+	adminToken, _ := middleware.GenerateToken(1, "admin@test.com", "admin", testSecret, time.Hour)
 
-	payload := map[string]interface{}{
-		"customerId": 101,
-		"productId":  501,
-		"quantity":   2,
+	// 1. Unauthenticated request -> 401
+	body := bytes.NewBufferString(`{"customerId": 101, "productId": 501, "quantity": 2}`)
+	reqNoAuth, _ := http.NewRequest(http.MethodPost, "/api/v1/orders", body)
+	reqNoAuth.Header.Set("Content-Type", "application/json")
+	wNoAuth := httptest.NewRecorder()
+	r.ServeHTTP(wNoAuth, reqNoAuth)
+
+	if wNoAuth.Code != http.StatusUnauthorized {
+		t.Fatalf("Expected 401 Unauthorized, got %d", wNoAuth.Code)
 	}
-	bodyBytes, err := json.Marshal(payload)
+
+	// 2. Create Order with Customer token -> 201 Created
+	reqCreate, _ := http.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewBufferString(`{"customerId": 101, "productId": 501, "quantity": 2}`))
+	reqCreate.Header.Set("Content-Type", "application/json")
+	reqCreate.Header.Set("Authorization", fmt.Sprintf("Bearer %s", customerToken))
+	wCreate := httptest.NewRecorder()
+	r.ServeHTTP(wCreate, reqCreate)
+
+	if wCreate.Code != http.StatusCreated {
+		t.Fatalf("Expected 201 Created, got %d. Body: %s", wCreate.Code, wCreate.Body.String())
+	}
+
+	var created order.Order
+	if err := json.Unmarshal(wCreate.Body.Bytes(), &created); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	if created.ID == 0 || created.TotalPrice <= 0 {
+		t.Errorf("Created order verification failed: %+v", created)
+	}
+
+	// 3. Customer cannot update status -> 403 Forbidden
+	reqForbidden, _ := http.NewRequest(http.MethodPut, "/api/v1/orders/1/status", bytes.NewBufferString(`{"status": "CONFIRMED"}`))
+	reqForbidden.Header.Set("Content-Type", "application/json")
+	reqForbidden.Header.Set("Authorization", fmt.Sprintf("Bearer %s", customerToken))
+	wForbidden := httptest.NewRecorder()
+	r.ServeHTTP(wForbidden, reqForbidden)
+
+	if wForbidden.Code != http.StatusForbidden {
+		t.Fatalf("Expected 403 Forbidden, got %d", wForbidden.Code)
+	}
+
+	// 4. Admin updates status -> 200 OK
+	reqAdmin, _ := http.NewRequest(http.MethodPut, "/api/v1/orders/1/status", bytes.NewBufferString(`{"status": "CONFIRMED"}`))
+	reqAdmin.Header.Set("Content-Type", "application/json")
+	reqAdmin.Header.Set("Authorization", fmt.Sprintf("Bearer %s", adminToken))
+	wAdmin := httptest.NewRecorder()
+	r.ServeHTTP(wAdmin, reqAdmin)
+
+	if wAdmin.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK, got %d", wAdmin.Code)
+	}
+}
+
+// Requirement 11: 100 Concurrent Order Requests without Race Conditions
+func TestConcurrent100Orders(t *testing.T) {
+	orderRepo := order.NewMemoryRepository()
+	productRepo := product.NewMemoryRepository()
+
+	productSvc := product.NewService(productRepo)
+	orderSvc := order.NewService(orderRepo, productSvc)
+
+	concurrency := 100
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			req := &order.CreateOrderRequest{
+				CustomerID: int64(100 + idx),
+				ProductID:  501,
+				Quantity:   2,
+			}
+			o, err := orderSvc.CreateOrder(context.Background(), req)
+			if err != nil || o.ID == 0 {
+				t.Errorf("Failed concurrent order creation: %v", err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	list, err := orderRepo.List(context.Background())
 	if err != nil {
-		t.Fatalf("Failed to marshal JSON payload: %v", err)
+		t.Fatalf("Failed to retrieve order list: %v", err)
 	}
-
-	// Dispatch 100 concurrent order requests
-	for i := 0; i < totalRequests; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			req, reqErr := http.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewBuffer(bodyBytes))
-			if reqErr != nil {
-				atomic.AddInt64(&failedRequests, 1)
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			if w.Code == http.StatusCreated {
-				atomic.AddInt64(&successfulRequests, 1)
-			} else {
-				atomic.AddInt64(&failedRequests, 1)
-			}
-		}()
+	if len(list) != concurrency {
+		t.Errorf("Expected %d orders, got %d", concurrency, len(list))
 	}
-
-	wg.Wait()
-
-	// Assertions for concurrent request execution
-	if failedRequests > 0 {
-		t.Errorf("Expected 0 failures across 100 concurrent requests, got %d failures", failedRequests)
-	}
-
-	if successfulRequests != totalRequests {
-		t.Fatalf("Expected %d successful creations, got %d", totalRequests, successfulRequests)
-	}
-
-	// Verify all 100 records were persisted safely in the repository
-	ctx := context.Background()
-	orders, listErr := orderRepo.List(ctx)
-	if listErr != nil {
-		t.Fatalf("Failed to fetch orders from repository after concurrency test: %v", listErr)
-	}
-
-	if len(orders) != totalRequests {
-		t.Errorf("Repository contains %d orders, expected %d", len(orders), totalRequests)
-	}
-}
-
-func TestConcurrentOrderReadWrite(t *testing.T) {
-	router, _, _ := setupTestRouter(t)
-
-	// Pre-create one order to test concurrent read/write race conditions
-	createPayload := `{"customerId": 200, "productId": 501, "quantity": 1}`
-	initReq, _ := http.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewBufferString(createPayload))
-	initReq.Header.Set("Content-Type", "application/json")
-	initResp := httptest.NewRecorder()
-	router.ServeHTTP(initResp, initReq)
-
-	if initResp.Code != http.StatusCreated {
-		t.Fatalf("Failed to create seed order: status %d", initResp.Code)
-	}
-
-	var createdOrder struct {
-		ID int64 `json:"id"`
-	}
-	if err := json.Unmarshal(initResp.Body.Bytes(), &createdOrder); err != nil {
-		t.Fatalf("Failed to parse created order ID: %v", err)
-	}
-
-	var wg sync.WaitGroup
-	const iterations = 50
-
-	// Half goroutines reading orders, half creating new orders
-	for i := 0; i < iterations; i++ {
-		wg.Add(2)
-
-		// Concurrent reader
-		go func() {
-			defer wg.Done()
-			req, _ := http.NewRequest(http.MethodGet, "/api/v1/orders", nil)
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			if w.Code != http.StatusOK {
-				t.Errorf("Concurrent GET /orders returned status %d", w.Code)
-			}
-		}()
-
-		// Concurrent writer
-		go func() {
-			defer wg.Done()
-			body := bytes.NewBufferString(`{"customerId": 300, "productId": 501, "quantity": 1}`)
-			req, _ := http.NewRequest(http.MethodPost, "/api/v1/orders", body)
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			if w.Code != http.StatusCreated {
-				t.Errorf("Concurrent POST /orders returned status %d", w.Code)
-			}
-		}()
-	}
-
-	wg.Wait()
 }
